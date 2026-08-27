@@ -47,6 +47,7 @@ jobs:
       - name: Try to launch the instance
         if: steps.check.outputs.skip == 'false'
         run: |
+          set +e
           OUT=$(oci compute instance launch \
             --compartment-id "${{ secrets.OCI_TENANCY }}" \
             --availability-domain "${{ secrets.OCI_AD }}" \
@@ -58,6 +59,7 @@ jobs:
             --display-name "hwang-server" \
             --ssh-authorized-keys-file ~/.oci/vm_key.pub 2>&1)
           STATUS=$?
+          set -e
           echo "$OUT"
           if [ $STATUS -eq 0 ]; then
             echo "### :tada: Instance launched!" >> "$GITHUB_STEP_SUMMARY"
