@@ -1,0 +1,77 @@
+name: oci-instance-retry-v2
+
+on:
+  schedule:
+    - cron: '*/15 * * * *'
+  workflow_dispatch: {}
+
+jobs:
+  retry:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Install OCI CLI
+        run: pip install --quiet oci-cli
+
+      - name: Configure OCI credentials
+        run: |
+          mkdir -p ~/.oci
+          printf '%s' "${{ secrets.OCI_PRIVATE_KEY }}" > ~/.oci/key.pem
+          chmod 600 ~/.oci/key.pem
+          cat > ~/.oci/config <<EOF
+          [DEFAULT]
+          user=${{ secrets.OCI_USER }}
+          fingerprint=${{ secrets.OCI_FINGERPRINT }}
+          tenancy=${{ secrets.OCI_TENANCY }}
+          region=${{ secrets.OCI_REGION }}
+          key_file=~/.oci/key.pem
+          EOF
+          printf '%s' "${{ secrets.OCI_SSH_PUBLIC_KEY }}" > ~/.oci/vm_key.pub
+
+      - name: Skip if instance already exists
+        id: check
+        run: |
+          EXISTING=$(oci compute instance list \
+            --compartment-id "${{ secrets.OCI_TENANCY }}" \
+            --display-name "hwang-server" \
+            --query "data[?\"lifecycle-state\"!='TERMINATED']" \
+            --raw-output 2>/dev/null || echo "[]")
+          if [ "$EXISTING" != "[]" ] && [ -n "$EXISTING" ]; then
+            echo "already exists, nothing to do:"
+            echo "$EXISTING"
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Try to launch the instance
+        if: steps.check.outputs.skip == 'false'
+        run: |
+          set +e
+          OUT=$(oci compute instance launch \
+            --compartment-id "${{ secrets.OCI_TENANCY }}" \
+            --availability-domain "${{ secrets.OCI_AD }}" \
+            --shape "VM.Standard.A1.Flex" \
+            --shape-config '{"ocpus":2,"memoryInGBs":12}' \
+            --image-id "${{ secrets.OCI_IMAGE_ID }}" \
+            --subnet-id "${{ secrets.OCI_SUBNET_ID }}" \
+            --assign-public-ip true \
+            --display-name "hwang-server" \
+            --ssh-authorized-keys-file ~/.oci/vm_key.pub 2>&1)
+          STATUS=$?
+          set -e
+          echo "$OUT"
+          if [ $STATUS -eq 0 ]; then
+            echo "### :tada: Instance launched!" >> "$GITHUB_STEP_SUMMARY"
+            echo '```' >> "$GITHUB_STEP_SUMMARY"
+            echo "$OUT" >> "$GITHUB_STEP_SUMMARY"
+            echo '```' >> "$GITHUB_STEP_SUMMARY"
+          elif echo "$OUT" | grep -qiE "capacity|toomanyrequests|429"; then
+            echo "no capacity yet, will retry on next scheduled run"
+          else
+            echo "### :warning: Non-retryable error" >> "$GITHUB_STEP_SUMMARY"
+            echo '```' >> "$GITHUB_STEP_SUMMARY"
+            echo "$OUT" >> "$GITHUB_STEP_SUMMARY"
+            echo '```' >> "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
