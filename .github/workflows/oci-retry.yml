@@ -1,5 +1,8 @@
 name: oci-instance-retry
 
+# re-touched 2026-08-28 to try to force GitHub to (re)register the schedule trigger - the
+# schedule hadn't fired even once in ~3 hours despite correct config (workflow active,
+# Actions enabled, cron syntax valid, on the default branch).
 on:
   schedule:
     - cron: '*/15 * * * *'
